@@ -6,22 +6,49 @@ from io import BytesIO
 from PIL import Image
 
 class BaseCorrector:
-    def __init__(self, pipeline):
-        self.pipeline = pipeline
-        self.images = pipeline.get_images()
+    def __init__(self, imageCorrection):
+        self.imageCorrection = imageCorrection
 
 class IlluminationCorrector(BaseCorrector):
-    def __init__(self, pipeline):
-        super().__init__(pipeline)
+    def __init__(self, imageCorrection):
+        super().__init__(imageCorrection)
         
-        self.ref_img = self.images['reference_tile']
-        self.tar_img = self.images['target_tile']
-        self.ref_white = self.images['reference_white']
-        self.tar_white = self.images['target_white']
-        self.ref_cal = self.images['reference_calibration']
-        self.tar_cal = self.images['target_calibration']
+        self.ref_img = self.imageCorrection.ref_img
+        self.ref_white = self.imageCorrection.ref_white
+        self.ref_cal = self.imageCorrection.ref_cal
         
-        self.settings = pipeline.illumination_settings
+        self.settings = imageCorrection.illumination_settings
+        
+    def detect_sample_region(self, image, reference_area=None):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        v = np.median(blurred)
+        lower = int(max(0, 0.66 * v))
+        upper = int(min(255, 1.33 * v))
+        edges = cv2.Canny(blurred, lower, upper)
+
+        kernel = np.ones((5, 5), np.uint8)
+        edges_dilated = cv2.dilate(edges, kernel, iterations=1)
+        
+        contours, _ = cv2.findContours(edges_dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return None
+
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if reference_area is not None and (area < reference_area * 0.8 or area > reference_area * 1.2):
+                continue
+            peri = cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+
+            if len(approx) in [4]:
+                return approx.reshape(-1, 2), area
+        
+        return None
         
     def extract_paper_region(self):
         
@@ -74,11 +101,11 @@ class IlluminationCorrector(BaseCorrector):
 
             return crop_top, crop_bottom, crop_left, crop_right
 
-        ref_corners, ref_area = self.pipeline.detect_sample_region(self.ref_white)
+        ref_corners, ref_area = self.detect_sample_region(self.ref_white)
         if ref_corners is None or len(ref_corners) != 4:
             raise ValueError("Could not detect paper region in reference image.")
 
-        tar_corners, _ = self.pipeline.detect_sample_region(self.tar_white, reference_area=ref_area)
+        tar_corners, _ = self.detect_sample_region(self.tar_white, reference_area=ref_area)
         if tar_corners is None or len(tar_corners) != 4:
             raise ValueError("Could not detect paper region in target image.")
 
@@ -86,8 +113,8 @@ class IlluminationCorrector(BaseCorrector):
         target_paper = crop_with_quad(self.tar_white, tar_corners)
         
         if self.settings.get("visualize", True):
-            self.pipeline.preview_sample_region(ref_corners, self.ref_white, ref_paper, show=False)
-            self.pipeline.preview_sample_region(tar_corners, self.tar_white, target_paper)
+            self.imageCorrection.preview_sample_region(ref_corners, self.ref_white, ref_paper, show=False)
+            self.imageCorrection.preview_sample_region(tar_corners, self.tar_white, target_paper)
         
         ref_margins = get_crop_margins(ref_corners, self.ref_white.shape)
         tar_margins = get_crop_margins(tar_corners, self.tar_white.shape)
@@ -228,44 +255,6 @@ class IlluminationCorrector(BaseCorrector):
         full_map[:, full_w - crop_right:] = full_map[:, full_w - crop_right - 1:full_w - crop_right]  # right
 
         return full_map
-
-    def apply_map(self, target):
-        corrected = target.astype(np.float32)
-        for channel in range(3):
-            corrected[:, :, channel] *= self.illumination_map
-        
-        corrected = np.clip(corrected, 0, 255)
-        corrected_rgb = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
-        return corrected_rgb.astype(np.uint8)
-        
-    def visualize(self):
-        self.pipeline.visualize_3images(
-            [self.ref_cal, self.tar_cal, self.tar_cal_illumination],
-            ["Reference Calibration", "Target Calibration", "Illumination Corrected Target Calibration"],
-            show=False
-        )
-        self.pipeline.visualize_3images(
-            [self.ref_img, self.tar_img, self.tar_img_illumination],
-            ["Reference Image", "Target Image", "Illumination Corrected Target Image"],
-            show=False
-        )
-        
-        fig, ax = plt.subplots(figsize=(6, 4), dpi=300)
-        im = ax.imshow(self.illumination_map, cmap='viridis')
-        ax.axis('off')
-        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label("Relative Illumination")
-        buf = BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-        plt.close(fig)
-        buf.seek(0)
-        map_rgb = np.array(Image.open(buf).convert('RGB'))
-        
-        self.pipeline.visualize_3images(
-            [self.ref_white, self.tar_white, map_rgb],
-            ["Reference White", "Target White", "Illumination Map"],
-            resize_to=(900, 600)
-        )    
     
     def visualize_paper_regions(self, vis_image, sample_points, region_size, sample_step):
         plt.figure(figsize=(12, 8))
@@ -288,34 +277,27 @@ class IlluminationCorrector(BaseCorrector):
         plt.tight_layout()
         plt.show()
         
-    def process(self):
+    def get_illumination_map(self):
+        
+        self.tar_img = self.imageCorrection.tar_img
+        self.tar_cal = self.imageCorrection.target_cal
+        self.tar_white = self.imageCorrection.tar_white
+        
         ref_white_roi, tar_white_roi = self.extract_paper_region()
         sample_points, sample_ratios = self.calculate_illumination_ratios(ref_white_roi, tar_white_roi)
 
         print("Interpolating illumination map...")
         illumination_map = self.interpolate_illumination_map(sample_points, sample_ratios, ref_white_roi.shape)
         smoothed_map = self.smooth_map(illumination_map)
-        self.illumination_map = self.resize_map_to_full(smoothed_map)
         
-        self.tar_cal_illumination = cv2.cvtColor(self.apply_map(self.tar_cal), cv2.COLOR_BGR2RGB)
-        self.tar_img_illumination = cv2.cvtColor(self.apply_map(self.tar_img), cv2.COLOR_BGR2RGB)
-        
-        if self.settings.get("visualize", True):
-            self.visualize()
-            
-        return self.tar_cal_illumination, self.tar_img_illumination
-        
+        return self.resize_map_to_full(smoothed_map)
 
 class ColorCorrector(BaseCorrector):
-    def __init__(self, pipeline):
-        super().__init__(pipeline)
-        
-        self.ref_img = self.images['reference_tile']
-        self.tar_img = pipeline.tar_img_illumination
-        self.ref_cal = self.images['reference_calibration']
-        self.tar_cal = pipeline.tar_cal_illumination
-        
-        self.settings = pipeline.color_settings
+    def __init__(self, imageCorrection):
+        super().__init__(imageCorrection)
+        self.ref_img = self.imageCorrection.ref_img
+        self.ref_cal = self.imageCorrection.ref_cal        
+        self.settings = imageCorrection.color_settings
         
     def order_points(self, pts):
         rect = np.zeros((4, 2), dtype="float32")
@@ -353,9 +335,9 @@ class ColorCorrector(BaseCorrector):
 
     def segment_cal_sample(self):
         
-        ref_corners = self.pipeline.detect_sample_region_cal(self.ref_cal)
+        ref_corners = self.detect_sample_region_cal(self.ref_cal)
         ref_cal_seg = self.crop_with_quad(self.ref_cal, ref_corners)
-        tar_corners = self.pipeline.detect_sample_region_cal(self.tar_cal)
+        tar_corners = self.detect_sample_region_cal(self.tar_cal)
         tar_cal_seg = self.crop_with_quad(self.tar_cal, tar_corners)
         
         ref_h, ref_w = ref_cal_seg.shape[:2]
@@ -368,8 +350,8 @@ class ColorCorrector(BaseCorrector):
         self.tar_cal_segment = cv2.resize(tar_cal_seg, (final_w, final_h), interpolation=cv2.INTER_AREA)
 
         if self.settings.get("visualize", True):
-            self.pipeline.preview_sample_region(ref_corners, self.ref_cal, ref_cal_seg, show=False)
-            self.pipeline.preview_sample_region(tar_corners, self.tar_cal, tar_cal_seg)
+            self.imageCorrection.preview_sample_region(ref_corners, self.ref_cal, ref_cal_seg, show=False)
+            self.imageCorrection.preview_sample_region(tar_corners, self.tar_cal, tar_cal_seg)
 
     def compute_ccm_from_patch_grid_from_segments(self):
         rows, cols = self.settings.get("grid_shape", (4, 7))
@@ -412,13 +394,6 @@ class ColorCorrector(BaseCorrector):
         M, _, _, _ = np.linalg.lstsq(A, B, rcond=None)
         
         self.ccm = M.T
-    
-    def apply_ccm(self, image_rgb):
-        h, w, _ = image_rgb.shape
-        reshaped = image_rgb.reshape(-1, 3).astype(np.float32)
-        corrected = reshaped @ self.ccm.T
-        corrected = np.clip(corrected, 0, 255)
-        return corrected.reshape(h, w, 3).astype(np.uint8)
 
     def build_histogram_lut(self, source_channel, reference_channel):
 
@@ -455,111 +430,10 @@ class ColorCorrector(BaseCorrector):
             result[:, :, i] = cv2.LUT(image[:, :, i], luts[i])
         return result
 
-    def process(self):
-        self.segment_cal_sample()
-        
-        self.compute_ccm_from_patch_grid_from_segments()
-        applied_ccm = self.apply_ccm(self.tar_img)
-        
-        # _, luts = self.match_histogram_with_luts(self.ref_cal_segment, self.tar_cal_segment)
-        # matched_image = self.apply_luts_rgb(applied_ccm, luts)
-        
-        # cv2.imshow("Color Corrected Target Image", matched_image)
-        # cv2.imshow("Original Target Image", self.tar_img)
-        # cv2.imshow("Reference Image", self.ref_img)
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
-        
-        if self.settings.get("visualize", True):
-            display_size = (800, 600)
-            self.pipeline.visualize_3images(
-                [self.ref_img, self.tar_img, applied_ccm],
-                ["Reference Image", "Target img - Corrected illum", "Color Corrected Target"],
-                resize_to=display_size
-            )
-        
+    def correct_cal_illumination(self):
+        corrected_tar_cal = self.imageCorrection.apply_map(self.tar_cal)
+        self.tar_cal = corrected_tar_cal
 
-class ImageCorrectionPipeline:
-    def __init__(self, reference_paths, target_paths, illumination_settings, color_settings):
-        self.reference_paths = reference_paths
-        self.target_paths = target_paths
-        self.illumination_settings = illumination_settings
-        self.color_settings = color_settings
-        
-    def get_images(self):
-        return {
-            "reference_tile": self.ref_img,
-            "target_tile": self.tar_img,
-            "reference_white": self.ref_white,
-            "target_white": self.tar_white,
-            "reference_calibration": self.ref_cal,
-            "target_calibration": self.target_cal
-        }
-
-    def load_images(self):
-        self.ref_img = cv2.imread(self.reference_paths['tile'])
-        self.tar_img = cv2.imread(self.target_paths['tile'])
-        
-        self.ref_white = cv2.imread(self.reference_paths['white'])
-        self.tar_white = cv2.imread(self.target_paths['white'])
-        
-        self.ref_cal = cv2.imread(self.reference_paths['cal'])
-        self.target_cal = cv2.imread(self.target_paths['cal'])
-        
-        if any(img is None for img in [self.ref_img, self.tar_img, self.ref_white, self.tar_white, self.ref_cal, self.target_cal]):
-            raise ValueError("One or more images could not be loaded. Please check file paths.")
-    
-    def detect_sample_region(self, image, reference_area=None):
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        v = np.median(blurred)
-        lower = int(max(0, 0.66 * v))
-        upper = int(min(255, 1.33 * v))
-        edges = cv2.Canny(blurred, lower, upper)
-
-        kernel = np.ones((5, 5), np.uint8)
-        edges_dilated = cv2.dilate(edges, kernel, iterations=1)
-        
-        contours, _ = cv2.findContours(edges_dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-        # plt.figure(figsize=(15, 5))
-        # plt.subplot(1, 3, 1)
-        # plt.title("Blurred Gray")
-        # plt.imshow(blurred, cmap='gray')
-        # plt.axis('off')
-        
-        # plt.subplot(1, 3, 2)
-        # plt.title(f"Canny Edges (thresh {lower}-{upper})")
-        # plt.imshow(edges, cmap='gray')
-        # plt.axis('off')
-        
-        # image_contours = image.copy()
-        
-        # cv2.drawContours(image_contours, contours, -1, (0, 255, 0), 2)
-        # plt.subplot(1, 3, 3)
-        # plt.title(f"Contours ({len(contours)})")
-        # plt.imshow(cv2.cvtColor(image_contours, cv2.COLOR_BGR2RGB))
-        # plt.axis('off')
-        # plt.show()
-        
-        if not contours:
-            return None
-
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
-
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if reference_area is not None and (area < reference_area * 0.8 or area > reference_area * 1.2):
-                continue
-            peri = cv2.arcLength(cnt, True)
-            approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-
-            if len(approx) in [4]:
-                return approx.reshape(-1, 2), area
-        
-        return None
-    
     def detect_sample_region_cal(self, image):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5,5), 0)
@@ -616,6 +490,52 @@ class ImageCorrectionPipeline:
 
         return corners
 
+    def get_ccm(self):
+        
+        self.tar_img = self.imageCorrection.tar_img
+        self.tar_cal = self.imageCorrection.target_cal
+        
+        self.correct_cal_illumination()
+        self.segment_cal_sample()
+        
+        self.compute_ccm_from_patch_grid_from_segments()
+        return self.ccm
+
+class ImageCorrection:
+    def __init__(self, reference_paths, illumination_settings, color_settings):
+        self.illumination_settings = illumination_settings
+        self.color_settings = color_settings
+        self.load_ref_images(reference_paths)
+        self.illumination_corrector = IlluminationCorrector(self)
+        self.color_corrector = ColorCorrector(self)
+        
+    def get_images(self):
+        return {
+            "reference_tile": self.ref_img,
+            "target_tile": self.tar_img,
+            "reference_white": self.ref_white,
+            "target_white": self.tar_white,
+            "reference_calibration": self.ref_cal,
+            "target_calibration": self.target_cal
+        }
+        
+    def load_ref_images(self, reference_paths):
+        self.ref_img = cv2.imread(reference_paths['tile'])
+        self.ref_white = cv2.imread(reference_paths['white'])
+        self.ref_cal = cv2.imread(reference_paths['cal'])
+        
+        if any(img is None for img in [self.ref_img, self.ref_white, self.ref_cal]):
+            raise ValueError("One or more reference images could not be loaded. Please check file paths.")
+
+    def load_target_images(self, target_paths):
+        self.tar_img = cv2.imread(target_paths['tile'])
+        self.tar_white = cv2.imread(target_paths['white'])
+        self.target_cal = cv2.imread(target_paths['cal'])
+        
+        if any(img is None for img in [self.tar_img, self.tar_white, self.target_cal]):
+            raise ValueError("One or more target images could not be loaded. Please check file paths.")
+    
+
     def preview_sample_region(self, corners, image, cropped, resize_to=(800, 600), show=True):
         image_resized = cv2.resize(image.copy(), resize_to)
 
@@ -670,16 +590,55 @@ class ImageCorrectionPipeline:
         if show:
             plt.show()
 
-    def run(self):
-        self.load_images()
-        print("Images loaded successfully.")
+    def apply_map(self, target):
+        corrected = target.astype(np.float32)
+        for channel in range(3):
+            corrected[:, :, channel] *= self.illumination_map
         
-        self.illumination_corrector = IlluminationCorrector(self)
-        self.tar_cal_illumination, self.tar_img_illumination = self.illumination_corrector.process()
+        corrected = np.clip(corrected, 0, 255)
+        corrected_rgb = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
+        return corrected_rgb.astype(np.uint8)
+    
+    def apply_ccm(self, image_rgb):
+        h, w, _ = image_rgb.shape
+        reshaped = image_rgb.reshape(-1, 3).astype(np.float32)
+        corrected = reshaped @ self.ccm.T
+        corrected = np.clip(corrected, 0, 255)
+        return corrected.reshape(h, w, 3).astype(np.uint8)
 
-        self.color_corrector = ColorCorrector(self)
-        self.color_corrector.process()
+    def correct(self, img):
+        if not hasattr(self, 'illumination_map'):
+            raise ValueError("Illumination map not calculated. Please run calibrate() first.")
         
+        if not hasattr(self, 'ccm'):
+            raise ValueError("Color correction matrix not calculated. Please run calibrate() first.")
+        
+        img_illum = self.apply_map(img)
+        img_corrected = self.apply_ccm(img_illum)
+        print("[CORRECTION] Image is corrected!")
+        return img_corrected
+    
+    def calibrate(self, target_paths, show_test=False):
+        print("[CALIBRATION]: Starting")
+        self.load_target_images(target_paths)
+        print("[CALIBRATION] Target images loaded successfully.")
+        
+        self.illumination_map = self.illumination_corrector.get_illumination_map()
+        print("[CALIBRATION]: Calculated new illumination map")
+
+        self.ccm = self.color_corrector.get_ccm()
+        print("[CALIBRATION]: Calculated new color correction matrix")
+        print("[CALIBRATION]: Done!")
+
+        if show_test:
+            calibration_test = self.correct(self.tar_img)
+            self.visualize_3images(
+                [self.ref_img, self.tar_img, calibration_test],
+                ["Reference Image", "Target Image", "Calibrated Target Image"],
+                resize_to=(800, 600)
+            )
+
+
         
 if __name__ == "__main__":
     
@@ -705,7 +664,7 @@ if __name__ == "__main__":
         "sample_step": 50,
         "region_size": 10,
         "interpolation_method": "cubic",  # 'rbf', 'linear', 'cubic', 'nearest'
-        "visualize": False
+        "visualize": True
     }
     
     color_settings = {
@@ -714,5 +673,29 @@ if __name__ == "__main__":
         "visualize": True
     }
 
-    pipeline = ImageCorrectionPipeline(reference_paths, target_paths, illumination_settings, color_settings)
-    pipeline.run()
+    imageCorrection = ImageCorrection(reference_paths, illumination_settings, color_settings)
+    imageCorrection.calibrate(target_paths=target_paths)
+    corrected_image = imageCorrection.correct(imageCorrection.tar_img)
+    
+    imageCorrection.visualize_3images(
+        [imageCorrection.ref_img, imageCorrection.tar_img, corrected_image],
+        ["Reference Image", "Target Image", "Calibrated Target Image"],
+        resize_to=(800, 600)
+    )
+    
+    # ROund 2 of calibration
+    TARGET_CONDTION = '2_ls5'
+    target_paths = {
+        "cal": f'{CAL_DIR}/{TARGET_CONDTION}.jpg',
+        "tile": f'{TILES_DIR}/{TARGET_CONDTION}.jpg',
+        "white": f'{WHITE_DIR}/{TARGET_CONDTION}.jpg'
+    }
+    
+    imageCorrection.calibrate(target_paths=target_paths)
+    corrected_image = imageCorrection.correct(imageCorrection.tar_img)
+    
+    imageCorrection.visualize_3images(
+        [imageCorrection.ref_img, imageCorrection.tar_img, corrected_image],
+        ["Reference Image", "Target Image", "Calibrated Target Image"],
+        resize_to=(800, 600)
+    )
