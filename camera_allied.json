@@ -1,0 +1,24 @@
+{
+    "ExposureAuto": "Off",
+    "ExposureTime": 9250.0,
+    "BalanceWhiteAuto": "Off",
+    "BalanceRatioRed": 2.28,
+    "BalanceRatioBlue": 2.02,
+    "DeviceLinkThroughputLimit": "450000000",
+    "AcquisitionFrameRateEnable": "1",
+    
+    "ReferenceCalPath": "/data/reference_condition/0_ls6_cal.jpg",
+    "ReferenceWhitePath": "data/reference_condition/0_ls6_white.jpg",
+    "IlluminationMapPath": "data/reference_condition/illum_map.npy",
+    "ColorCorrectionMatrixPath": "data/reference_condition/ccm.npy",
+    
+    "IlluminationSmoothingSigma": 301,
+    "IlluminationSampleStep": 50,
+    "IlluminationRegionSize": 10,
+    "IlluminationInterpolationMethod": "cubic",
+    
+    "ColorCorrectiongGridRows": 7,
+    "ColorCorrectiongGridColumns": 4,
+    "ColorCorrectionSampleSize": 50 
+
+}
