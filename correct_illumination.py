@@ -5,31 +5,26 @@ from scipy.interpolate import griddata, RBFInterpolator
 
 class IlluminationCorrector:
     def __init__(self, reference_image_path, target_image_path, reference_new_path,
-                 target_new_path):
-        """
-        Initialize with paths to reference (good) and target (worse) images
-        """
+            target_new_path, reference_cal_path, target_cal_path):
+
         self.reference = cv2.imread(reference_image_path)
         self.target = cv2.imread(target_image_path)
         
-        if self.reference is None or self.target is None:
-            raise ValueError("Could not load one or both images")
-        
         self.reference_new = cv2.imread(reference_new_path)
-        if self.reference_new is None:
-            raise ValueError(f"Could not load new reference image: {reference_new_path}")
-        print(f"New reference image loaded: {self.reference_new.shape}")
-        
         self.target_new = cv2.imread(target_new_path)
-        if self.target_new is None:
-            raise ValueError(f"Could not load new target image: {target_new_path}")
-        print(f"New target image loaded: {self.target_new.shape}")
-        
         self.reference_rgb = cv2.cvtColor(self.reference, cv2.COLOR_BGR2RGB)
         self.target_rgb = cv2.cvtColor(self.target, cv2.COLOR_BGR2RGB)
         
-        print(f"Reference image shape: {self.reference.shape}")
-        print(f"Target image shape: {self.target.shape}")
+        self.reference_cal = cv2.imread(reference_cal_path)
+        self.target_cal = cv2.imread(target_cal_path)
+        self.reference_cal_rgb = cv2.cvtColor(self.reference_cal, cv2.COLOR_BGR2RGB)
+        self.target_cal_rgb = cv2.cvtColor(self.target_cal, cv2.COLOR_BGR2RGB)
+        
+        if self.reference is None or self.target is None or \
+            self.reference_new is None or self.target_new is None or \
+            self.reference_cal is None or self.target_cal is None:
+            raise ValueError("One or more image paths are invalid or images could not be loaded.")
+
         
     def extract_paper_region(self, crop_percentage=0.1):
 
@@ -46,13 +41,16 @@ class IlluminationCorrector:
         # cv2.waitKey()
         # cv2.destroyAllWindows()
         
+        # print(f"Extracted paper region: {ref_paper.shape} for reference and {target_paper.shape} for target")
+        # print(f"White ROI coordinates: {crop_h}, {crop_w}")
+        
         #TODO add automatic paper detection, resize both paper images
         # to the same size
         
         return ref_paper, target_paper, (crop_h, crop_w)
     
     def calculate_illumination_ratio_sampled(self, ref_paper, target_paper, 
-                                           sample_step=20, region_size=10):
+                                        sample_step=20, region_size=10):
 
         h, w = ref_paper.shape[:2]
         
@@ -70,8 +68,9 @@ class IlluminationCorrector:
                 ref_region = ref_gray[y-half_region:y+half_region+1, 
                                     x-half_region:x+half_region+1]
                 target_region = target_gray[y-half_region:y+half_region+1, 
-                                          x-half_region:x+half_region+1]
+                                        x-half_region:x+half_region+1]
                 
+                # print(ref_region.size, target_region.size)
                 ref_avg = np.mean(ref_region)
                 target_avg = np.mean(target_region)
                 
@@ -90,14 +89,15 @@ class IlluminationCorrector:
         
         print(f"Created {len(sample_points)} sample points")
         print(f"Ratio range: {sample_ratios.min():.3f} to {sample_ratios.max():.3f}")
+        print(f"Sample points: {sample_points[:5]}")  # Show first 5 points for debugging
         
         # Display the visualization
         plt.figure(figsize=(12, 8))
         vis_image_rgb = cv2.cvtColor(vis_image, cv2.COLOR_BGR2RGB)
         plt.imshow(vis_image_rgb)
         plt.title(f'Sampling Points and Regions\n'
-                 f'Sample step: {sample_step}px, Region size: {region_size}x{region_size}px\n'
-                 f'Total points: {len(sample_points)}')
+                f'Sample step: {sample_step}px, Region size: {region_size}x{region_size}px\n'
+                f'Total points: {len(sample_points)}')
         plt.axis('off')
         
         # Add legend
@@ -105,7 +105,7 @@ class IlluminationCorrector:
         from matplotlib.lines import Line2D
         legend_elements = [
             Line2D([0], [0], marker='s', color='w', markerfacecolor='green', 
-                   markersize=8, label=f'{region_size}x{region_size} sampling regions'),
+                markersize=8, label=f'{region_size}x{region_size} sampling regions'),
         ]
         plt.legend(handles=legend_elements, loc='upper right')
         
@@ -115,7 +115,7 @@ class IlluminationCorrector:
         return sample_points, sample_ratios
 
     def interpolate_illumination_map(self, sample_points, sample_ratios, target_shape, interpolation_method):
-  
+
         h, w = target_shape[:2]
 
         y_coords, x_coords = np.mgrid[0:h, 0:w]
@@ -130,16 +130,16 @@ class IlluminationCorrector:
             except:
                 print("RBF failed, falling back to cubic")
                 interpolated = griddata(sample_points, sample_ratios, grid_points, 
-                                      method='cubic', fill_value=1.0)
+                                    method='cubic', fill_value=1.0)
         else:
             interpolated = griddata(sample_points, sample_ratios, grid_points, 
-                                  method=interpolation_method, fill_value=1.0)
+                                method=interpolation_method, fill_value=1.0)
         
         mask = np.isnan(interpolated)
         if np.any(mask):
             print(f"Filling {np.sum(mask)} NaN values with nearest neighbor")
             interpolated_nearest = griddata(sample_points, sample_ratios, grid_points, 
-                                          method='nearest')
+                                        method='nearest')
             interpolated[mask] = interpolated_nearest[mask]
             
         return interpolated.reshape(h, w)
@@ -162,8 +162,8 @@ class IlluminationCorrector:
         full_h, full_w = self.target.shape[:2]
         
         map_resized = cv2.resize(illumination_map, 
-                               (full_w - 2*crop_w, full_h - 2*crop_h), 
-                               interpolation=cv2.INTER_CUBIC)
+                            (full_w - 2*crop_w, full_h - 2*crop_h), 
+                            interpolation=cv2.INTER_CUBIC)
         
         full_map = np.ones((full_h, full_w), dtype=np.float32)
         
@@ -177,7 +177,7 @@ class IlluminationCorrector:
         
         return full_map
     
-    def apply_correction_to_target_new(self, illumination_map, target_new=None):
+    def illumination_correction(self, illumination_map, target_new=None):
 
         if target_new is None:
             if self.target_new is None:
@@ -193,37 +193,153 @@ class IlluminationCorrector:
         corrected = np.clip(corrected, 0, 255)
         corrected_rgb = cv2.cvtColor(corrected, cv2.COLOR_BGR2RGB)
         return corrected_rgb.astype(np.uint8)
-    
-    
-    def apply_kries_color_adaptation(self, src_img, src_white_rgb, dst_white_rgb):
 
-        RGB_to_LMS = np.array([
-            [0.4002, 0.7076, -0.0808],
-            [-0.2263, 1.1653, 0.0457],
-            [0.0000, 0.0000, 0.9182]
-        ])
+    # def match_histograms(self, source, reference):
 
-        LMS_to_RGB = np.linalg.inv(RGB_to_LMS)
-
-        src_white_LMS = RGB_to_LMS @ src_white_rgb
-        dst_white_LMS = RGB_to_LMS @ dst_white_rgb
-
-        D = np.diag(dst_white_LMS / (src_white_LMS + 1e-6))
-
-        adaptation_matrix = LMS_to_RGB @ D @ RGB_to_LMS
-
-        img_float = src_img.astype(np.float32).copy() / 255
-        reshaped = img_float.reshape(-1, 3).T
-        adapted = adaptation_matrix @ reshaped
-        adapted = np.clip(adapted.T.reshape(src_img.shape), 0, 1)
-        adapted_img = (adapted * 255).astype(np.uint8)
+    #     print("Applying histogram matching...")
         
-        return adapted_img
-
+    #     matched = np.zeros_like(source)
+        
+    #     for channel in range(3):
+    #         # Get histograms
+    #         source_hist, source_bins = np.histogram(source[:, :, channel].flatten(), 
+    #                                             bins=256, range=(0, 256))
+    #         ref_hist, ref_bins = np.histogram(reference[:, :, channel].flatten(), 
+    #                                         bins=256, range=(0, 256))
+            
+    #         # Calculate CDFs (Cumulative Distribution Functions)
+    #         source_cdf = np.cumsum(source_hist).astype(np.float32)
+    #         ref_cdf = np.cumsum(ref_hist).astype(np.float32)
+            
+    #         # Normalize CDFs
+    #         source_cdf = source_cdf / source_cdf[-1]
+    #         ref_cdf = ref_cdf / ref_cdf[-1]
+            
+    #         # Create lookup table
+    #         lookup_table = np.zeros(256, dtype=np.uint8)
+            
+    #         for i in range(256):
+    #             # Find the closest CDF value in reference
+    #             closest_idx = np.argmin(np.abs(ref_cdf - source_cdf[i]))
+    #             lookup_table[i] = closest_idx
+            
+    #         # Apply lookup table
+    #         matched[:, :, channel] = lookup_table[source[:, :, channel]]
+        
+    #     return matched
     
+    def compute_color_correction_matrix(self, source_rgb, target_rgb):
+        """
+        source_rgb: (N, 3) target calibration image pixels (after illumination correction)
+        target_rgb: (N, 3) reference calibration image pixels
+        Returns a 3x3 matrix to convert source → reference
+        """
+        A = source_rgb.reshape(-1, 3).astype(np.float32)
+        B = target_rgb.reshape(-1, 3).astype(np.float32)
+        M, _, _, _ = np.linalg.lstsq(A, B, rcond=None)
+        return M.T
+    
+    def apply_color_correction_matrix(self, image_rgb, matrix):
+        h, w, _ = image_rgb.shape
+        reshaped = image_rgb.reshape(-1, 3).astype(np.float32)
+        corrected = reshaped @ matrix.T
+        corrected = np.clip(corrected, 0, 255)
+        return corrected.reshape(h, w, 3).astype(np.uint8)
+    
+    def compute_histogram_luts(self, source_rgb, reference_rgb):
+        """
+        Computes per-channel histogram LUTs to match source → reference.
+        Both images must be in RGB format.
+
+        Returns:
+            luts: List of 3 LUTs (one for each channel)
+        """
+        def get_lut(src_channel, ref_channel):
+            src_hist, _ = np.histogram(src_channel.flatten(), bins=256, range=(0, 256))
+            ref_hist, _ = np.histogram(ref_channel.flatten(), bins=256, range=(0, 256))
+
+            src_cdf = np.cumsum(src_hist).astype(np.float32)
+            ref_cdf = np.cumsum(ref_hist).astype(np.float32)
+            src_cdf /= src_cdf[-1]
+            ref_cdf /= ref_cdf[-1]
+
+            lut = np.zeros(256, dtype=np.uint8)
+            for i in range(256):
+                idx = np.argmin(np.abs(ref_cdf - src_cdf[i]))
+                lut[i] = idx
+            return lut
+
+        luts = [get_lut(source_rgb[:, :, c], reference_rgb[:, :, c]) for c in range(3)]
+        return luts
+    
+    def compute_histogram_luts_searchsorted(self, source_rgb, reference_rgb):
+        """
+        Alternative version using np.searchsorted instead of argmin.
+        """
+        def calculate_cdfs(image):
+            channels = cv2.split(image)
+            cdfs = []
+            for channel in channels:
+                hist = cv2.calcHist([channel], [0], None, [256], [0, 256])
+                cdf = hist.cumsum()
+                cdfs.append(cdf / cdf.max())
+            return cdfs
+
+        src_cdfs = calculate_cdfs(source_rgb)
+        ref_cdfs = calculate_cdfs(reference_rgb)
+        
+        luts = []
+        for i in range(3):
+            lut = np.zeros(256, dtype=np.uint8)
+            for j in range(256):
+                lut[j] = np.searchsorted(ref_cdfs[i], src_cdfs[i][j])
+            luts.append(lut)
+        
+        return luts
+        
+    def apply_histogram_luts(self, image_rgb, luts):
+        """
+        Applies per-channel LUTs to an RGB image.
+
+        Args:
+            image_rgb: Input RGB image.
+            luts: List of 3 LUTs (R, G, B)
+
+        Returns:
+            RGB image after applying LUTs.
+        """
+        corrected_channels = [cv2.LUT(image_rgb[:, :, c], luts[c]) for c in range(3)]
+        return cv2.merge(corrected_channels)
+    
+    def visualize_calibration_correction(self, corrected_cal_target, save_path=None):
+        
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        
+        # Reference calibration
+        axes[0].imshow(self.reference_cal_rgb)
+        axes[0].set_title('Reference Calibration\n(Good Conditions)')
+        axes[0].axis('off')
+        
+        # Target calibration (original)
+        axes[1].imshow(self.target_cal_rgb)
+        axes[1].set_title('Target Calibration\n(Worse Conditions - Original)')
+        axes[1].axis('off')
+        
+        # Corrected target calibration
+        axes[2].imshow(corrected_cal_target)
+        axes[2].set_title('Target Calibration\n(Illumination Corrected)')
+        axes[2].axis('off')
+        
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path.replace('.jpg', '_calibration.jpg'), dpi=300, bbox_inches='tight')
+        plt.show()
+        
+            
     def process(self, crop_percentage=0.1, smoothing_sigma=20,
                 sample_step=20, region_size=10, interpolation_method='cubic'):
 
+        print("=== STEP 1: ILLUMINATION CORRECTION ===")
         print("Extracting paper regions...")
         ref_paper, target_paper, crop_coords = self.extract_paper_region(crop_percentage)
         
@@ -238,38 +354,114 @@ class IlluminationCorrector:
         illumination_map = self.interpolate_illumination_map(
             sample_points, sample_ratios, ref_paper.shape, interpolation_method)
         
+        plt.imshow(illumination_map, cmap='viridis')
+        plt.title("Illumination Map")
+        plt.legend(['Illumination Ratio'])
+        plt.colorbar(label='Relative Illumination')
+        plt.tight_layout()
+        plt.axis('off')
+        plt.show()
         print("Smoothing illumination map...")
         smooth_map = self.create_smooth_illumination_map(illumination_map, smoothing_sigma)
         
         print("Resizing map to full image...")
         full_illumination_map = self.resize_map_to_full_image(smooth_map, crop_coords)
         
-        print("Applying to the new image...")
-        corrected_target_new = self.apply_correction_to_target_new(full_illumination_map)
+        # Apply illumination correction to calibration target
+        print("Applying illumination correction to calibration target...")
+        corrected_cal_target = self.illumination_correction(full_illumination_map, self.target_cal)
         
-        print("Applying Kries color adaptation...")
-        kries_target_new= self.apply_kries_color_adaptation(
-            corrected_target_new, target_white_rgb, ref_white_rgb
+        # Visualize calibration correction
+        print("Displaying calibration correction results...")
+        self.visualize_calibration_correction(corrected_cal_target)
+        
+        print("Applying illumination correction to new target image...")
+        corrected_new_target = self.illumination_correction(full_illumination_map, self.target_new)
+        
+        
+        print("\n=== STEP 2: COLOR CORRECTION ===")
+        
+        self.visualize_patch_grid_on_image(
+            corrected_cal_target, 
+            (190, 420),
+            (1740, 1200),
+            grid_shape=(4, 7),
+            sample_size=50
+        )
+        self.visualize_patch_grid_on_image(
+            self.reference_cal_rgb, 
+            (190, 420),
+            (1740, 1200),
+            grid_shape=(4, 7),
+            sample_size=50
         )
         
-        corrected_rgb = cv2.cvtColor(corrected_target_new, cv2.COLOR_BGR2RGB)
-        kries_rgb     = cv2.cvtColor(kries_target_new, cv2.COLOR_BGR2RGB)
-        plt.figure(figsize=(14, 7))
-
-        plt.subplot(1, 2, 1)
-        plt.imshow(corrected_rgb)
-        plt.title("After Illumination Correction")
-        plt.axis('off')
-
-        plt.subplot(1, 2, 2)
-        plt.imshow(kries_rgb)
-        plt.title("After Kries Color Correction")
-        plt.axis('off')
-
-        plt.tight_layout()
-        # plt.show()
         
-        return corrected_target_new, full_illumination_map
+        M = self.compute_ccm_from_patch_grid(
+            corrected_cal_target,
+            self.reference_cal_rgb,
+            (190, 420),
+            (1740, 1200),
+            grid_shape=(4, 7),
+            sample_size=100
+        )
+        
+        M_applied = self.apply_ccm(
+            corrected_new_target,
+            M
+        )
+        
+        print(M)
+        
+        display_size = (800, 600)
+        final_corrected_resized = cv2.resize(M_applied, display_size)
+        
+        # ccm = self.compute_color_correction_matrix(corrected_cal_target, self.reference_cal_rgb)
+        # final_corrected_target = self.apply_color_correction_matrix(corrected_new_target, ccm)
+        
+        # luts = self.compute_histogram_luts(corrected_new_target, self.reference_new)
+        # luts = self.compute_histogram_luts_searchsorted(corrected_new_target, self.reference_new)
+        # final_corrected_target = self.apply_histogram_luts(corrected_new_target, luts)
+        
+        # Resize images for display
+        # display_size = (800, 600)
+        # final_corrected_resized = cv2.resize(final_corrected_target, display_size)
+        target_new_resized = cv2.resize(self.target_new, display_size)
+        reference_new_resized = cv2.resize(self.reference_new, display_size)
+        
+        cv2.imshow("Final Corrected Target1", cv2.cvtColor(final_corrected_resized, cv2.COLOR_BGR2RGB))
+        cv2.imshow("Original Target1", target_new_resized)
+        cv2.imshow("Original Reference1", reference_new_resized)
+
+        # cv2.imshow("Final Corrected Target", cv2.cvtColor(final_corrected_resized, cv2.COLOR_BGR2RGB))
+        # cv2.imshow("Original Target", cv2.cvtColor(target_new_resized, cv2.COLOR_BGR2RGB))
+        # cv2.imshow("Original Reference", cv2.cvtColor(reference_new_resized, cv2.COLOR_BGR2RGB))
+
+
+        
+        
+        # print("\n=== STEP 2: HISTOGRAM MATCHING ===")
+        # luts = self.compute_histogram_luts(corrected_cal_target, self.reference_cal)
+        # # luts = self.compute_histogram_luts_searchsorted(corrected_new_target, self.reference_new)
+        # final_matched = self.apply_histogram_luts(M_applied, luts)
+        
+        # cv2.imshow("Final Matched Image", cv2.cvtColor(final_matched, cv2.COLOR_BGR2RGB))
+        
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        # # Apply histogram matching using corrected calibration images
+        # print("Matching histograms between corrected calibration images...")
+        # histogram_matched_cal = self.match_histograms(corrected_cal_target, self.reference_cal)
+        
+        # # Apply the same histogram transformation to the new image
+        # print("Applying histogram matching to new target image...")
+        # final_corrected_new = self.match_histograms(corrected_target_new, self.reference_new)
+        
+        # # # Convert final result to RGB for visualization
+        # # final_corrected_new_rgb = cv2.cvtColor(final_corrected_new, cv2.COLOR_BGR2RGB)
+        
+        
+        return corrected_new_target, full_illumination_map
     
     def visualize_results(self, corrected_image, illumination_map, save_path):
 
@@ -311,19 +503,106 @@ class IlluminationCorrector:
         plt.savefig(save_path, dpi=300)
         plt.show()
         
+    
+    def compute_ccm_from_patch_grid(self, target_rgb, reference_rgb, top_left, bottom_right, grid_shape=(4, 7), sample_size=10):
+
+        rows, cols = grid_shape
+        patch_width = (bottom_right[0] - top_left[0]) / cols
+        patch_height = (bottom_right[1] - top_left[1]) / rows
+
+        sampled_colors_target = []
+        sampled_colors_reference = []
+
+        for row in range(rows):
+            for col in range(cols):
+                # Center of the current patch
+                center_x = int(top_left[0] + (col + 0.5) * patch_width)
+                center_y = int(top_left[1] + (row + 0.5) * patch_height)
+
+                # Define sampling region
+                half_size = sample_size // 2
+                x_start = max(center_x - half_size, 0)
+                x_end = min(center_x + half_size + 1, target_rgb.shape[1])
+                y_start = max(center_y - half_size, 0)
+                y_end = min(center_y + half_size + 1, target_rgb.shape[0])
+
+                target_patch = target_rgb[y_start:y_end, x_start:x_end]
+                reference_patch = reference_rgb[y_start:y_end, x_start:x_end]
+                # mean_color = np.mean(patch.reshape(-1, 3), axis=0)
+                # sampled_colors_target.append(mean_color)
+                
+                sampled_colors_target.append(np.mean(target_patch.reshape(-1, 3), axis=0))
+                sampled_colors_reference.append(np.mean(reference_patch.reshape(-1, 3), axis=0))
+
+        # Solve for CCM: reference ≈ M * sampled → M = least squares solution
+        A = np.array(sampled_colors_target, dtype=np.float32)
+        B = np.array(sampled_colors_reference, dtype=np.float32)
+        print("A shape (target):", A.shape)
+        print("B shape (reference):", B.shape)
+
+        M, _, _, _ = np.linalg.lstsq(A, B, rcond=None)
+
+        return M.T
+    
+    def visualize_patch_grid_on_image(self, image_rgb, top_left, bottom_right, grid_shape=(4, 7), sample_size=10):
+
+        vis_img = image_rgb.copy()
+        rows, cols = grid_shape
+        patch_width = (bottom_right[0] - top_left[0]) / cols
+        patch_height = (bottom_right[1] - top_left[1]) / rows
+        half_size = sample_size // 2
+
+        for row in range(rows):
+            for col in range(cols):
+                center_x = int(top_left[0] + (col + 0.5) * patch_width)
+                center_y = int(top_left[1] + (row + 0.5) * patch_height)
+                cv2.rectangle(vis_img,
+                            (center_x - half_size, center_y - half_size),
+                            (center_x + half_size, center_y + half_size),
+                            (255, 0, 0), 1)
+                cv2.circle(vis_img, (center_x, center_y), 2, (0, 255, 0), -1)
+
+        plt.figure(figsize=(10, 6))
+        plt.imshow(vis_img)
+        plt.title("Sample Regions for Calibration Patches")
+        plt.axis('off')
+        plt.show()
+    
+    def apply_ccm(self, image_rgb, ccm_matrix):
+        """
+        Applies a 3x3 CCM to an RGB image.
+
+        Args:
+            image_rgb (np.ndarray): Input RGB image.
+            ccm_matrix (np.ndarray): 3x3 color correction matrix.
+
+        Returns:
+            np.ndarray: Color-corrected RGB image.
+        """
+        h, w, _ = image_rgb.shape
+        reshaped = image_rgb.reshape(-1, 3).astype(np.float32)
+        corrected = reshaped @ ccm_matrix.T
+        corrected = np.clip(corrected, 0, 255)
+        return corrected.reshape(h, w, 3).astype(np.uint8)
+        
 
 # Usage example
 if __name__ == "__main__":
     
     reference_con = '0_ls8'
-    target_con = '4_ls4'
-    corrections_dir = '/home/vicosdemo/Documents/dataset/work_ploscice/corrections'
+    target_con = '3_ls3'
+    white_cal_dir = './white'
+    tile_images_dir = './tile images'
+    cal_dir = './cal'
+    corrections_dir = './corrections'
 
     corrector = IlluminationCorrector(
-        reference_image_path=f"/home/vicosdemo/Documents/dataset/work_ploscice/white/{reference_con}.jpg",
-        target_image_path=f"/home/vicosdemo/Documents/dataset/work_ploscice/white/{target_con}.jpg",
-        reference_new_path=f"/home/vicosdemo/Documents/dataset/work_ploscice/tile images/{reference_con}.jpg",
-        target_new_path = f"/home/vicosdemo/Documents/dataset/work_ploscice/tile images/{target_con}.jpg"
+        reference_image_path=f"{white_cal_dir}/{reference_con}.jpg",
+        target_image_path=f"{white_cal_dir}/{target_con}.jpg",
+        reference_new_path=f"{tile_images_dir}/{reference_con}.jpg",
+        target_new_path = f"{tile_images_dir}/{target_con}.jpg",
+        reference_cal_path = f"{cal_dir}/{reference_con}.jpg",
+        target_cal_path = f"{cal_dir}/{target_con}.jpg"
     )
     
     # Process the images

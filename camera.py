@@ -34,6 +34,9 @@ class VimbaCameraHandler():
         self.settings_changed = False
         
         self.image_correction = image_correction
+        self.capture_mode = None
+        self.tar_white = None
+        self.tar_cal = None
 
         self.camera: Camera = None
 
@@ -41,10 +44,23 @@ class VimbaCameraHandler():
         if frame.get_status() == FrameStatus.Complete:
             frame_copy = frame.as_numpy_ndarray()
             height, width, _ = frame_copy.shape
+
             frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_BAYER_RGGB2RGB)
-            frame_copy = self.image_correction.correct(frame_copy)
-            frame_copy = cv2.resize(frame_copy, (width//2, height//2))
             
+            if self.capture_mode is not None:
+                if self.capture_mode == "white":
+                    self.tar_white = frame_copy
+                    self.message = "White target image captured"
+                elif self.capture_mode == 'cal':
+                    self.tar_cal = frame_copy
+                    self.message = "Calibration target image captured"
+            self.capture_mode = None
+            
+            # if self.image_correction.illum_map.shape[:2] != (height, width):
+                    # self.image_correction.illum_map = cv2.resize(self.image_correction.illum_map, (width, height))
+            frame_copy = self.image_correction.correct(frame_copy)
+                
+            frame_copy = cv2.resize(frame_copy, (width//2, height//2))
             self.frame = np.array(frame_copy)
 
             self.n_frames += 1
@@ -74,6 +90,22 @@ class VimbaCameraHandler():
                 return
             elif command == "GetExposureTime":
                 self.message = f"ExposureTime {self.camera.ExposureTime.get()}"
+                return
+            
+            elif command == "CaptureWhite":
+                self.correction_enabled = False
+                self.capture_mode = "white"
+                self.message = "Waiting for the white target image"
+                return
+            elif command == "CaptureCal":
+                self.correction_enabled = False
+                self.capture_mode = "cal"
+                self.message = "Waiting for the calibration target image"
+                return
+            elif command == "Calibrate":
+                self.image_correction.calibrate(target_cal=self.tar_cal, target_white=self.tar_white)
+                self.tar_cal, self.tar_white = None, None
+                self.message = "Calibration complete"
                 return
             
             self.camera.stop_streaming()
@@ -106,14 +138,14 @@ def setup_args():
     return args
 
 def load_correction_data(config):
-    ref_cal_path   = config.get("ReferenceCalPath")
-    ref_white_path = config.get("ReferenceWhitePath")
+    
+    reference_paths = {
+        "cal": config.get("ReferenceCalPath"),
+        "white": config.get("ReferenceWhitePath"),
+    }
     
     illum_path = config.get("IlluminationMapPath")
     ccm_path = config.get("ColorCorrectionMatrixPath")
-    
-    illum_map = np.load(illum_path).astype(np.float32)
-    ccm = np.load(ccm_path).astype(np.float32)
 
     illumination_settings = {
         "smoothing_sigma": config.get("IlluminationSmoothingSigma", 301),
@@ -129,12 +161,9 @@ def load_correction_data(config):
         "visualize": False
     }
 
-    reference_paths = {
-        "cal": ref_cal_path,
-        "white": ref_white_path,
-    }
+
     
-    return reference_paths, illum_map, ccm, illumination_settings, color_settings
+    return reference_paths, illumination_settings, color_settings, illum_path, ccm_path
 
 def main():
     args = setup_args()
@@ -164,13 +193,13 @@ def main():
     # Load correction parameters  #
     ###############################
     
-    reference_paths, illum_map, ccm, illumination_settings, color_settings = load_correction_data(config=config)
+    reference_paths, illumination_settings, color_settings, illum_path, ccm_path = load_correction_data(config=config)
     image_correction = ImageCorrection(
         reference_paths=reference_paths, 
         illumination_settings=illumination_settings, 
         color_settings=color_settings,
-        illum_map=illum_map,
-        ccm=ccm
+        illum_path=illum_path,
+        ccm_path=ccm_path
     )
 
     ###########################

@@ -8,17 +8,17 @@
     "AcquisitionFrameRateEnable": "1",
     
     "ReferenceCalPath": "/data/reference_condition/0_ls6_cal.jpg",
-    "ReferenceWhitePath": "data/reference_condition/0_ls6_white.jpg",
-    "IlluminationMapPath": "data/reference_condition/illum_map.npy",
-    "ColorCorrectionMatrixPath": "data/reference_condition/ccm.npy",
+    "ReferenceWhitePath": "/data/reference_condition/0_ls6_white.jpg",
+    "IlluminationMapPath": "/data/reference_condition/illum_map.npy",
+    "ColorCorrectionMatrixPath": "/data/reference_condition/ccm.npy",
     
     "IlluminationSmoothingSigma": 301,
     "IlluminationSampleStep": 50,
     "IlluminationRegionSize": 10,
     "IlluminationInterpolationMethod": "cubic",
     
-    "ColorCorrectiongGridRows": 7,
-    "ColorCorrectiongGridColumns": 4,
+    "ColorCorrectionGridRows": 7,
+    "ColorCorrectionGridColumns": 4,
     "ColorCorrectionSampleSize": 50 
 
 }
