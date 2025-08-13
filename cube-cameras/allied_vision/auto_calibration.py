@@ -1,8 +1,7 @@
 import cv2
 import numpy as np
 from scipy.interpolate import griddata, RBFInterpolator
-import matplotlib.pyplot as plt
-from PIL import Image
+import os
 
 class BaseCorrector:
     def __init__(self, imageCorrection):
@@ -22,6 +21,7 @@ class IlluminationCorrector(BaseCorrector):
     def detect_sample_region(self, image, reference_area=None):
         if image is None:
             raise ValueError("Input image for sample region detection is None.")
+        
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
@@ -278,25 +278,6 @@ class IlluminationCorrector(BaseCorrector):
 
         return full_map
     
-    def visualize_paper_regions(self, vis_image, sample_points, region_size, sample_step):
-        plt.figure(figsize=(12, 8))
-        
-        plt.imshow(vis_image)
-        plt.title(f'Sampling Points and Regions\n' 
-                f'Sample step: {sample_step}px, Region size: {region_size}x{region_size}px\n' 
-                f'Total points: {len(sample_points)}')
-        plt.axis('off')
-        
-        from matplotlib.patches import Rectangle, Circle
-        from matplotlib.lines import Line2D
-        legend_elements = [
-            Line2D([0], [0], marker='s', color='w', markerfacecolor='green', 
-                markersize=8, label=f'{region_size}x{region_size} sampling regions'),
-        ]
-        plt.legend(handles=legend_elements, loc='upper right')
-        
-        plt.tight_layout()
-        plt.show()
         
     def compute_illumination_map(self):
         if not hasattr(self.imageCorrection, 'target_cal') or self.imageCorrection.target_cal is None:
@@ -504,7 +485,7 @@ class ColorCorrector(BaseCorrector):
                 verticals.append(line)
         
         if not horizontals or not verticals:
-            return None # Not enough lines to determine corners
+            return None
 
         horizontals = sorted(horizontals, key=lambda l: min(l[1], l[3]))
         top_line = horizontals[0]
@@ -590,63 +571,14 @@ class ImageCorrection:
             raise ValueError(str(e))
         
     def load_matrices(self):
-        try:
-            self.illumination_map = np.load(self.illum_path).astype(np.float32)
-            self.ccm = np.load(self.ccm_path).astype(np.float32)
-        except FileNotFoundError as e:
-            print(f"[ERROR] Could not load correction data: {e}. ")
-            print("Please make sure the paths in camera_allied.json are correct and/or calibrate the system.")
-            raise
-
-    def preview_sample_region(self, corners, image, cropped, resize_to=(800, 600), show=True):
-        image_resized = cv2.resize(image.copy(), resize_to)
-
-        scale_x = resize_to[0] / image.shape[1]
-        scale_y = resize_to[1] / image.shape[0]
-        scaled_corners = np.array([[int(x * scale_x), int(y * scale_y)] for x, y in corners])
-
-        for pt in scaled_corners:
-            cv2.circle(image_resized, tuple(pt), 6, (0, 0, 255), -1)
-
-        plt.figure(figsize=(12, 6))
-        plt.subplot(1, 2, 1)
-        plt.imshow(image_resized)
-        plt.title("Original with Detected Corners")
-        plt.axis("off")
-        plt.subplot(1, 2, 2)
-        plt.imshow(cropped)
-        plt.title("Cropped Region")
-        plt.axis("off")
-        plt.tight_layout()
-        
-        if show:
-            plt.show()
-        
-    def visualize_3images(self, imgs, titles, resize_to=(800, 600), show=True):
-        img0_resized = cv2.resize(imgs[0], resize_to)
-        img1_resized = cv2.resize(imgs[1], resize_to)
-        img2_resized = cv2.resize(imgs[2], resize_to)
-
-        plt.figure(figsize=(12, 4))
-        
-        plt.subplot(1, 3, 1)
-        plt.imshow(img0_resized)
-        plt.title(titles[0])
-        plt.axis('off')
-
-        plt.subplot(1, 3, 2)
-        plt.imshow(img1_resized)
-        plt.title(titles[1])
-        plt.axis('off')
-
-        plt.subplot(1, 3, 3)
-        plt.imshow(img2_resized)
-        plt.title(titles[2])
-        plt.axis('off')
-
-        plt.tight_layout()
-        if show:
-            plt.show()
+            if os.path.exists(self.illum_path) and os.path.exists(self.ccm_path):
+                self.illumination_map = np.load(self.illum_path).astype(np.float32)
+                self.ccm = np.load(self.ccm_path).astype(np.float32)
+                print("Correction matrices (Illum_map and ccm) loaded.")
+                self.calibrated = True
+            else:
+                print("illum_map and ccm do not exist")
+                self.calibrated = False        
 
     def apply_map(self, target):
         if self.illumination_map is None:
@@ -700,65 +632,3 @@ class ImageCorrection:
         except IOError as e:
             raise RuntimeError(f"Failed to save calibration data: {e}")
         
-# if __name__ == "__main__":
-    
-#     REF_CONDTION = '0_ls6'
-#     TARGET_CONDTION = '0_ls2'
-#     WHITE_DIR = '/home/vicosdemo/Downloads/work_ploscice-main/test/white'
-#     CAL_DIR = '/home/vicosdemo/Downloads/work_ploscice-main/test/cal'
-    
-#     reference_paths = {
-#         "cal": f'{CAL_DIR}/{REF_CONDTION}.jpg', 
-#         "white": f'{WHITE_DIR}/{REF_CONDTION}.jpg',
-#     }
-
-#     illumination_settings = {
-#         "crop_percentage": 0.2,
-#         "smoothing_sigma": 301,
-#         "sample_step": 50,
-#         "region_size": 10,
-#         "interpolation_method": "cubic",
-#         "visualize": False
-#     }
-    
-#     color_settings = {
-#         "grid_shape": (4, 7),
-#         "sample_size": 50,
-#         "visualize": False
-#     }
-    
-#     illum_path = "/home/vicosdemo/vicos-cube/cube-cameras/allied_vision/reference_condition/illum_map.npy"
-#     ccm_path = "/home/vicosdemo/vicos-cube/cube-cameras/allied_vision/reference_condition/ccm.npy"
-    
-#     illum_map = np.load(illum_path).astype(np.float32)
-#     ccm = np.load(ccm_path).astype(np.float32)
-    
-#     # SCENATIO 1: Get CCM and ILLUM_MAP from files and correct
-#     new_image_path = "/home/vicosdemo/Downloads/work_ploscice-main/test/tile/0_ls2.jpg"
-#     new_image = cv2.imread(new_image_path)
-#     new_image = cv2.cvtColor(new_image, cv2.COLOR_BGR2RGB)
-    
-#     ref_image_path = "/home/vicosdemo/Downloads/work_ploscice-main//tile images/0_ls6.jpg"
-#     ref_image = cv2.imread(ref_image_path)
-#     ref_image = cv2.cvtColor(ref_image, cv2.COLOR_BGR2RGB)    
-
-#     imageCorrection = ImageCorrection(reference_paths, illumination_settings, color_settings, illum_map, ccm)
-#     corrected_image = imageCorrection.correct(new_image)
-    
-#     imageCorrection.visualize_3images(
-#         [ref_image, new_image, corrected_image],
-#         ["Reference Image", "Target Image", "Calibrated Target Image"],
-#         resize_to=(800, 600)
-#     )
-    
-#     # SCENARIO 2: New calibration
-#     # target_cal_path = "/home/vicosdemo/Downloads/work_ploscice-main/cal/0_ls2.jpg"
-#     # target_cal = cv2.imread(target_cal_path)
-#     # target_cal = cv2.cvtColor(target_cal, cv2.COLOR_BGR2RGB)
-    
-#     # target_white_path = "/home/vicosdemo/Downloads/work_ploscice-main/white/0_ls2.jpg"
-#     # target_white = cv2.imread(target_white_path)
-#     # target_white = cv2.cvtColor(target_white, cv2.COLOR_BGR2RGB)  
-    
-#     # imageCorrection = ImageCorrection(reference_paths, illumination_settings, color_settings, illum_map, ccm)
-#     # imageCorrection.calibrate(target_cal=target_cal, target_white=target_white)

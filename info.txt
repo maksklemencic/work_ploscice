@@ -1,0 +1,28 @@
+Different types of flows:
+1. Initial start:
+	Correction data is loaded from the config file.
+	This loads settings, reference_paths, paths of ccm and illumination_map (saved as numpy)
+	Load ccm and illumination map from the saved files.
+	Class instance ImageCorrection is created, and the parameters are sent (the ones from the config)
+	Method correct() is called for on every frame from the camera to correct the image.
+	
+=> This takes the previous calibraiton of the system. CCM and Illumination map are calcuated based on the reference condition and the target condition at the time of calibration. If the target condition is different, the system needs to be calibrated again. The corrected images might look weird if it is not calibrated.
+
+2. Calibration:
+	Call the method calibrate().
+	You will need to recieve target_cal and target_white calibration images.
+	This is input to calibrate()
+	New ccm and illum_map is calculated and also saved to the files.
+	If you run it again it will automatically read from files (scenario 1.)
+	
+	
+	
+Color space management & gamma correction
+This is a subtle but important point for photometric accuracy.
+
+🧠 TL;DR:
+Images are usually in gamma-encoded (nonlinear) RGB — especially JPEG, PNG, and OpenCV-loaded images.
+
+Division in nonlinear RGB space is not physically correct for illumination correction.
+
+You should ideally linearize (remove gamma) before correcting and re-apply gamma afterward.

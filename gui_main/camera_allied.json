@@ -1,0 +1,23 @@
+{
+    "ExposureAuto": "Off",
+    "ExposureTime": 9250.0,
+    "BalanceWhiteAuto": "Off",
+    "BalanceRatioRed": 2.28,
+    "BalanceRatioBlue": 2.02,
+    "DeviceLinkThroughputLimit": "450000000",
+    "AcquisitionFrameRateEnable": "1",
+
+    "ReferenceCalPath": "/opt/correction_dir/reference/cal.jpg",
+    "ReferenceWhitePath": "/opt/correction_dir/reference/white.jpg",
+    "IlluminationMapPath": "/opt/correction_dir/correction_maps/illum_map.npy",
+    "ColorCorrectionMatrixPath": "/opt/correction_dir/correction_maps/ccm.npy",
+    
+    "IlluminationSmoothingSigma": 301,
+    "IlluminationSampleStep": 50,
+    "IlluminationRegionSize": 10,
+    "IlluminationInterpolationMethod": "cubic",
+    
+    "ColorCorrectionGridRows": 7,
+    "ColorCorrectionGridColumns": 4,
+    "ColorCorrectionSampleSize": 50 
+}

@@ -1,0 +1,74 @@
+environment:
+    # VICOS_CUBE_GUI_DIR: "/path/to/vicos-cube/cube-main" # this should be set in the environment by *.sh
+    # VICOS_CUBE_VIRTENV: "/path/to/vicos-cube/venv" # this should be set in the environment by *.sh
+    PYTHONEXEC: "${VICOS_CUBE_VIRTENV}/bin/python3.10"
+    DOCKEREXEC: "docker"
+    BUS: "/tmp/echo.sock"
+plugins:
+    - echolib.ignition.Mapping
+    - docker
+programs:
+    router:
+        required: True
+        command: ${PYTHONEXEC} -m echolib
+    camera: 
+        required: True
+        depends:
+           - router
+        docker:
+            image: camerafeed_allied:v1
+            volumes:
+                - ${VICOS_CUBE_GUI_DIR}/config/camera_allied.json:/opt/config/camera0.json
+                - /home/vicosdemo/correction_dir/correction_maps:/opt/correction_dir/correction_maps
+                - /tmp/echo.sock:/tmp/echo.sock
+            devices:
+                - /dev/bus/usb/002
+        console: True
+        command: ""
+        remap:
+            camera_stream_0: camera0
+    camera_kinect_azure: 
+        required: True
+        depends:
+           - router
+        console: True
+        command: "docker run -it --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v ${VICOS_CUBE_GUI_DIR}/config/kinect_azure.py:/opt/config.py  -v /tmp/echo.sock:/tmp/echo.sock --device /dev/bus/usb:/dev/bus/usb  --gpus 'all,\"capabilities=compute,utility,graphics\"' camera-kinect_azure"
+    camera-ptz:
+        required: True
+        depends:
+           - router
+        docker:
+            image: camera-ptz:latest
+            volumes:
+                - /tmp/echo.sock:/tmp/echo.sock
+        command: ""
+        console: True
+    #camera_kinect_v2: 
+    #    required: False
+    #    depends:
+    #       - router
+    #    console: True
+    #    #command: ""
+    #    command: "docker run -it -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v /tmp/echo.sock:/tmp/echo.sock --device /dev/bus/usb:/dev/bus/usb  camera-kinect2"    
+    manager:
+        required: True
+        depends:
+           - router
+           - camera
+           - camera_kinect_azure
+        directory: "${VICOS_CUBE_GUI_DIR}"
+        command: ${PYTHONEXEC} -u docker_manager.py
+        console: True
+        environment:
+            PYTHONPATH: "${VICOS_CUBE_GUI_DIR}"
+    gui:
+        required: True
+        command: ${PYTHONEXEC} -u gui_main.py
+        directory: "${VICOS_CUBE_GUI_DIR}"
+        depends:
+           - router
+           - manager
+        console: True
+        environment:
+            PYTHONPATH: "${VICOS_CUBE_GUI_DIR}"
+    

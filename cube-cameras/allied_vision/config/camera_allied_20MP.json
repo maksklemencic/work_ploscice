@@ -1,0 +1,14 @@
+{
+    "ExposureAuto": "Off",
+    "ExposureTime": 400000.0,
+    "BalanceWhiteAuto": "Off",
+    "BalanceRatioRed": 2.28,
+    "BalanceRatioBlue": 2.02,
+    "DeviceLinkThroughputLimit": "450000000",
+    "AcquisitionFrameRateEnable": "1",
+    "BinningHorizontal": 2,
+    "BinningHorizontalMode": "Average",
+    "BinningVertical": 2,
+    "BinningVerticalMode": "Average"
+
+}

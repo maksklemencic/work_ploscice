@@ -35,6 +35,7 @@ class VimbaCameraHandler():
         
         self.image_correction = image_correction
         self.capture_mode = None
+        self.correct = True
         self.tar_white = None
         self.tar_cal = None
 
@@ -44,23 +45,21 @@ class VimbaCameraHandler():
         if frame.get_status() == FrameStatus.Complete:
             frame_copy = frame.as_numpy_ndarray()
             height, width, _ = frame_copy.shape
-
             frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_BAYER_RGGB2RGB)
-            
+            frame_copy = cv2.resize(frame_copy, (width//2, height//2))
+                         
             if self.capture_mode is not None:
                 if self.capture_mode == "white":
                     self.tar_white = frame_copy
-                    self.message = "White target image captured"
+                    print("Captured a target white image")
                 elif self.capture_mode == 'cal':
                     self.tar_cal = frame_copy
-                    self.message = "Calibration target image captured"
+                    print("Captured a target cal image")
             self.capture_mode = None
             
-            # if self.image_correction.illum_map.shape[:2] != (height, width):
-                    # self.image_correction.illum_map = cv2.resize(self.image_correction.illum_map, (width, height))
-            frame_copy = self.image_correction.correct(frame_copy)
-                
-            frame_copy = cv2.resize(frame_copy, (width//2, height//2))
+            if self.image_correction.calibrated and self.correct:
+                frame_copy = self.image_correction.correct(frame_copy)
+                        
             self.frame = np.array(frame_copy)
 
             self.n_frames += 1
@@ -72,11 +71,15 @@ class VimbaCameraHandler():
 
     def callback_camera_input(self, message):
 
-        command, value = echolib.MessageReader(message).readString().split(" ")
-
-        try:
+        recieved_message = echolib.MessageReader(message).readString()
+        if " " in recieved_message:
+            command, value = recieved_message.split(" ")
             print(f"Got command: {command} -> {value}")
-
+        else:
+            command = recieved_message
+            print(f"Got command: {command}")        
+        
+        try:
             if command == "ExposureAuto":
                 self.camera.ExposureAuto.set(value)
             elif command == "BalanceWhiteAuto":
@@ -93,20 +96,24 @@ class VimbaCameraHandler():
                 return
             
             elif command == "CaptureWhite":
-                self.correction_enabled = False
                 self.capture_mode = "white"
-                self.message = "Waiting for the white target image"
                 return
             elif command == "CaptureCal":
-                self.correction_enabled = False
                 self.capture_mode = "cal"
-                self.message = "Waiting for the calibration target image"
                 return
-            elif command == "Calibrate":
+            elif command == "AutoCalibrate":
                 self.image_correction.calibrate(target_cal=self.tar_cal, target_white=self.tar_white)
                 self.tar_cal, self.tar_white = None, None
-                self.message = "Calibration complete"
+                self.image_correction.calibrated = True
                 return
+            elif command == "CalibrationOff":
+                self.correct = False
+                return
+            elif command == "CalibrationOn":
+                self.correct = True
+                return
+            
+            
             
             self.camera.stop_streaming()
             self.settings_changed = True
@@ -160,8 +167,6 @@ def load_correction_data(config):
         "sample_size": config.get("ColorCorrectionSampleSize", 50),
         "visualize": False
     }
-
-
     
     return reference_paths, illumination_settings, color_settings, illum_path, ccm_path
 

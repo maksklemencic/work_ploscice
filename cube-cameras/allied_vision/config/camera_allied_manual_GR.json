@@ -1,0 +1,9 @@
+{
+    "ExposureAuto": "Off",
+    "ExposureTime": 14085.0,
+    "BalanceWhiteAuto": "Off",
+    "BalanceRatioRed": 2.17,
+    "BalanceRatioBlue": 2.05,
+    "DeviceLinkThroughputLimit": "450000000",
+    "AcquisitionFrameRateEnable": "1"
+}
